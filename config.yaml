@@ -1,0 +1,278 @@
+# 1. 模式与路径 (Modes & Paths)
+RESUME_TRAINING: false
+DEBUG_MODE: false
+HIGH_PERFORMANCE_MODE: true
+GENERATE_DATA_REPORT: false
+ROOT_DATA_PATH: '/home/zyj/caofei/HSR-DIGNET/dataset' # 服务器路径
+# ROOT_DATA_PATH: 'E:/Project-py/HSR-DIGNET/dataset'
+OUTPUT_DIR_NAME: 'results'
+
+# 高级功能参数 (Advanced Features)
+CHECKPOINT_FILE: 'checkpoint.pth'
+BEST_MODEL_FILE: 'best_model.pth'
+RANDOM_SEED: 42
+
+# 2.1 数据预处理：定义用于判断变量是否“冻结”的方差阈值
+# 这里的科学计数法如果写为 1e-6 则被识别为字符串
+VARIANCE_THRESHOLD: 1.0e-6
+# 特征选取：保留最大样本数80%
+FEATURE_SELECTION_THRESHOLD: 0.8
+
+# 学习率调度器参数 (使用 StepLR)
+USE_LR_SCHEDULER: True             # [true/false] 是否启用学习率调度器？
+LR_SCHEDULER_STEP_SIZE: 15         # 每多少个epoch，学习率进行一次衰减
+LR_SCHEDULER_GAMMA: 0.5            # 学习率衰减的乘法因子 (0.1代表衰减为原来的10%)
+
+# 2. 核心参数 (Core Parameters)
+TARGET_FAULT_CLASS: 8 # 后面的批次大小、学习率卸载了load文件中，自动选择了
+# ASR 预处理流水线控制,如果是VMD不用的话，这里不起效
+USE_PRECOMPUTED_ASR: false # true: 加载; false: 计算，为了生成离线文件
+
+hyperparameters:
+  # 数据预处理参数 (Preprocessing Parameters)
+  # 复现开关，true：复现性高；false：速度快
+  DETERMINISTIC_MODE: true
+  # 普通机器调试的批大小
+  BASE_BATCH_SIZE: 32
+
+  # 任务2：256@0.001； 任务8：1024@0.002，在load文件中根据class自动选择了
+  #HIGH_PERFORMANCE_BATCH_SIZE: 1024
+  #learning_rate: 0.002
+  sequence_length: 90
+  # 训练超参数 (Training Hyperparameters)
+  epochs: 500
+  # 早停尝试次数
+  EARLY_STOPPING_PATIENCE: 5
+  # 将批次打印频率参数化
+  PROGRESS_REPORT_FREQ: 10
+  # 特征重要性重复次数10
+  PERMUTATION_REPEATS: 10
+
+hgc_stp_module:
+    # gcn_type 可以是 'CGC', 'GCN', 'GAT', 'APPNP', 'GIN', 'None'
+    # 当设置为 'None' 时，将完全跳过混合图构建与空间传播模块，PAA(+state) 序列直接送入 ITR
+    gcn_type: 'CGC'
+    gat_heads: 4
+    node_embed_dim: 16      # GRU生成的节点嵌入向量维度
+    k_knn: 3               # 自适应图中每个节点保留的最相似邻居数量
+    alpha_initial: 0.5      # 图融合权重α的初始值 (将作为可学习参数)
+
+    # --- Sub-module 2.2: Spatio-Temporal Propagation ---
+    scene_embed_dim: 4      # 场景嵌入的维度
+    gcn_hidden_dim: 16      # CGC层的隐藏维度
+    gcn_layers: 3           # CGC层的数量
+    # 以下参数仅对特定GCN类型有效（可选，有默认值）
+    appnp_K: 10            # APPNP的传播步数（默认10）
+    appnp_alpha: 0.1       # APPNP的teleport概率（默认0.1）
+
+itr_module:
+  # itr_type 可以是: 'Dynamic_ITR','Dynamic_ITR_CE','Single_ITR', 'GRU', 'MLP', 'LSTM', 'Transformer'；
+  # 跑满五次使用方法：在'Dynamic_ITR'的基础上不早停即可：not self.enable_early_exit,无单独的模式
+  # Single_ITR为跑一次，使用CELOSS的模式
+  # Dynamic_ITR_CE为迭代5次，但只使用最后一次迭代的logits计算单一CELoss（用于验证组合损失vs单一损失的效果）
+  # 'Dynamic_ITR' 是您的完整模型
+  # 'Transformer' 是标准的Transformer Encoder模型，支持多层配置
+  itr_type: 'Dynamic_ITR'
+  # 提前退出功能开关和阈值
+  enable_early_exit: true
+  early_exit_threshold: 0.95
+
+  # gru_hidden_dim：
+  #                  CGC, GCN, SAGE, APPNP, GIN: gcn_hidden_dim = 16
+  #                             GAT: gcn_hidden_dim * gat_heads = 16*4 = 64
+  # mlp_hidden_dim:  CGC, GCN, SAGE, APPNP, GIN: 16; GAT:64
+  mlp_hidden_dim: 16
+  gru_hidden_dim: 16
+  lstm_hidden_dim: 16
+  
+  # Transformer相关参数
+  transformer_hidden_dim: 64      # Transformer的隐藏维度（默认与hgc_output_dim相同）
+  transformer_num_layers: 2       # Transformer Encoder的层数（支持多层配置）
+  transformer_nhead: 4            # Transformer的注意力头数
+  transformer_dropout: 0.1        # Transformer的dropout率
+  transformer_dim_feedforward: 128 # Transformer前馈网络的维度（默认是hidden_dim*2）
+
+  num_iterations: 5   # 迭代推理块重复次数 N
+  nhead: 4            # 交叉注意力头数
+  dropout: 0.1        # ITR模块中的dropout率
+
+  lambda_initial: 0.2  # 动态损失中的惩罚项系数 lambda初始值
+  lambda_final: 0.5     # 最终值
+
+robustness_test:
+  enable: false                  # 是否启用测试阶段鲁棒性分析（仅作用于测试集，不影响训练与验证）true false
+  # 针对 AWGN 的噪声强度列表，含义：噪声标准差 = level * 信号自身标准差
+  gaussian_levels: [0.1, 0.3, 0.5, 0.7, 1.0]
+  # 针对瞬态脉冲干扰的密度列表，含义：被击中的时间点比例
+  impulse_levels: [0.01, 0.03, 0.05, 0.10, 0.20]
+  # 瞬态脉冲的幅值系数：脉冲幅度 = factor * 信号标准差
+  impulse_magnitude_factor: 5.0
+  # 是否在鲁棒性分析结果中包含“无噪声”基线一行
+  include_clean_baseline: true
+
+asr:
+    # 是否启用 PAA 降采样（窗口聚合 + 均值/斜率，特征从 1 维变为 2 维）
+    # true: 使用当前的 ASR+PAA 流水线（10 倍降维 + mean/slope）
+    # false: 完全跳过 ASR/PAA，后续直接使用对齐+清洗后的原始传感器序列（不降维、不取均值、不取斜率）
+    enable_paa: false
+    # 目前系统中无噪声，去除VMD模块
+    enable_vmd: false
+    enable_plot: false
+
+    paa_window_size: 10     # PAA的窗口大小 (将10个点压缩为1个特征点)
+    vmd_epochs: 200
+    vmd_alpha: 500         # VMD的带宽约束参数
+    vmd_tau: 0.5             # VMD的噪声容限 (0表示无噪声)
+    vmd_DC: false           # VMD是否包含直流分量
+    vmd_init: 1             # VMD的初始化方式 (1表示均匀初始化)
+    vmd_tol: 1.0e-7         # VMD的收敛容忍度
+    vmd_K_by_type:
+      pressure: 2
+      temperature: 2
+      flow: 2
+      # 阀门不需要，只有0/1
+      actuator: 0
+      default: 2
+
+    # Shared Attention Network Config
+    attention_hidden_dim: 16 # 注意力网络中间层的维度，输入维度是模态k的大小
+    # Visualization State Background Colors
+    state_colors:
+      normal: 'lightgreen'          # 正常状态 (class=0)
+      transient: 'lightyellow'      # 瞬态 (class > 100)
+      fault: 'lightcoral'           # 故障确定态 (0 < class <= 100)
+# class 8 共12个
+# 'WELL-19-0', 'WELL-19-1', 'WELL-19-2', 'WELL-19-3', 'WELL-26-5', 'WELL-26-6','WELL-26-7','WELL-27-8','WELL-28-9','WELL-29-10','WELL-30-11','WELL-32-13'
+# class 2 共21个
+# 'WELL-2-0', 'WELL-3-1', 'WELL-3-2', 'WELL-3-3', 'WELL-9-4', 'WELL-11-6','WELL-11-7','WELL-11-8','WELL-11-9','WELL-11-10','WELL-11-11','WELL-11-12'
+# 'WELL-11-13', 'WELL-11-14', 'WELL-11-15','WELL-11-16','WELL-11-17','WELL-11-18','WELL-12-19','WELL-12-20','WELL-13-21'
+WELL_SUBSET_LIST:
+  - 'WELL-2-0'
+  - 'WELL-3-1'
+  - 'WELL-3-2'
+  - 'WELL-3-3'
+  - 'WELL-9-4'
+  - 'WELL-11-6'
+  - 'WELL-11-7'
+  - 'WELL-11-8'
+  - 'WELL-11-9'
+  - 'WELL-11-10'
+  - 'WELL-11-11'
+  - 'WELL-11-12'
+  - 'WELL-11-13'
+  - 'WELL-11-14'
+  - 'WELL-11-15'
+  - 'WELL-11-16'
+  - 'WELL-11-17'
+  - 'WELL-11-18'
+  - 'WELL-12-19'
+  - 'WELL-12-20'
+  - 'WELL-13-21'
+
+graph_definitions:
+  scenes: ["production_channel", "gas_lift_channel", "service_channel"]
+
+  production_channel:
+    nodes: ['P-PDG', 'T-PDG', 'ESTADO-DHSV', 'ESTADO-M1', 'P-TPT', 'T-TPT', 'P-MON-SDV-P',
+            'ESTADO-SDV-P', 'P-MON-CKP', 'T-MON-CKP', 'ABER-CKP', 'P-JUS-CKP', 'T-JUS-CKP']
+    edges:
+      - ['P-PDG', 'T-PDG']
+      - ['ESTADO-DHSV', 'P-PDG' ]
+      - ['ESTADO-DHSV', 'T-PDG' ]
+      - ['ESTADO-DHSV', 'ESTADO-M1']
+
+      - ['P-TPT', 'T-TPT']
+      - ['P-TPT', 'ESTADO-M1']
+      - ['T-TPT', 'ESTADO-M1']
+
+      - ['P-TPT', 'ESTADO-SDV-P']
+      - ['T-TPT', 'ESTADO-SDV-P']
+      - ['T-TPT', 'P-MON-SDV-P']
+      - ['P-TPT', 'P-MON-SDV-P']
+      - ['P-MON-SDV-P', 'ESTADO-M1']
+      - ['P-MON-SDV-P', 'ESTADO-SDV-P']
+
+      - ['P-MON-CKP', 'T-MON-CKP']
+      - ['P-MON-CKP', 'ABER-CKP']
+      - ['T-MON-CKP', 'ABER-CKP']
+      - ['P-MON-CKP', 'ESTADO-SDV-P' ]
+      - ['T-MON-CKP', 'ESTADO-SDV-P' ]
+      - ['ESTADO-SDV-P', 'ABER-CKP']
+
+      - ['ABER-CKP', 'P-JUS-CKP']
+      - ['ABER-CKP', 'T-JUS-CKP']
+      - ['P-JUS-CKP', 'T-JUS-CKP']
+  gas_lift_channel:
+    nodes: ['QBS', 'P-JUS-BS', 'QGL', 'P-MON-CKGL', 'ABER-CKGL', 'P-JUS-CKGL', 'ESTADO-SDV-GL']
+    edges:
+      - ['QBS', 'P-JUS-BS']
+      - ['QGL', 'P-JUS-BS']
+      - ['QBS', 'QGL']
+
+      - [ 'QBS', 'P-MON-CKGL' ]
+      - [ 'QGL', 'P-MON-CKGL' ]
+      - [ 'P-JUS-BS', 'P-MON-CKGL' ]
+
+      - [ 'P-MON-CKGL', 'ABER-CKGL' ]
+      - [ 'QBS', 'ABER-CKGL' ]
+      - [ 'QGL', 'ABER-CKGL' ]
+      - [ 'P-JUS-BS', 'ABER-CKGL' ]
+
+      - [ 'P-JUS-BS', 'P-JUS-CKGL' ]
+      - [ 'P-JUS-CKGL', 'ESTADO-SDV-GL' ]
+      - [ 'P-JUS-BS', 'ESTADO-SDV-GL' ]
+  service_channel:
+    nodes: ['ESTADO-PXO', 'ESTADO-M2', 'ESTADO-W2', 'P-ANULAR', 'ESTADO-W1', 'PT-P', 'ESTADO-XO']
+    edges:
+      - ['ESTADO-PXO', 'ESTADO-W2']
+      - ['ESTADO-W2', 'ESTADO-XO']
+      - ['ESTADO-PXO', 'ESTADO-W1']
+      - ['ESTADO-W2', 'P-ANULAR']
+      - ['ESTADO-XO', 'P-ANULAR']
+      - ['ESTADO-W2', 'P-ANULAR']
+      - ['ESTADO-W1', 'PT-P']
+      - ['ESTADO-W1', 'ESTADO-XO']
+  inter_scene_edges:
+    - ['ESTADO-SDV-GL', 'ESTADO-PXO']
+    - ['ESTADO-XO', 'ESTADO-SDV-P']
+    - ['ESTADO-W1', 'ESTADO-SDV-P']
+
+    - ['ESTADO-W1', 'P-MON-SDV-P']
+    - ['ESTADO-W1', 'P-TPT']
+    - ['ESTADO-W1', 'T-TPT']
+    - ['ESTADO-W1', 'ESTADO-M1']
+
+    - ['ESTADO-XO', 'P-MON-SDV-P']
+    - ['ESTADO-XO', 'P-TPT']
+    - ['ESTADO-XO', 'T-TPT']
+    - ['ESTADO-XO', 'ESTADO-M1']
+
+    - ['ESTADO-M2', 'ESTADO-DHSV']
+    - ['ESTADO-M2', 'ESTADO-M1']
+  node_attributes:
+    ABER-CKGL: { type: actuator }
+    ABER-CKP:  { type: actuator }
+    ESTADO-SDV-GL: { type: actuator }
+    ESTADO-SDV-P: { type: actuator }
+    ESTADO-M1: { type: actuator }
+    ESTADO-DHSV: { type: actuator }
+    ESTADO-M2: { type: actuator }
+    ESTADO-W1: { type: actuator }
+    ESTADO-W2: { type: actuator }
+    ESTADO-XO: { type: actuator }
+    ESTADO-PXO: { type: actuator }
+    P-ANULAR: { type: pressure }
+    P-JUS-BS: { type: pressure }
+    P-JUS-CKGL: { type: pressure }
+    P-JUS-CKP: { type: pressure }
+    P-MON-CKGL: { type: pressure }
+    P-MON-CKP: { type: pressure }
+    P-MON-SDV-P: { type: pressure }
+    P-PDG: { type: pressure }
+    P-TPT: { type: pressure }
+    QBS: { type: flow }
+    QGL: { type: flow }
+    T-JUS-CKP: { type: temperature }
+    T-MON-CKP: { type: temperature }
+    T-PDG: { type: temperature }
+    T-TPT: { type: temperature }
