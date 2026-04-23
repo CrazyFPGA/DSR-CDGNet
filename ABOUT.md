@@ -1,0 +1,3 @@
+# About DSR-CDGNet
+
+**DSR-CDGNet** (Dynamic spatio-temporal reasoning and confidence-driven gating model) is a deep-learning framework for **fault detection in multi-sensor oil-well measurement systems**. It is designed to tackle two long-standing limitations of existing methods: (i) the **under-utilization of spatial topological information** among sensors, and (ii) the **absence of confidence quantification** in detection decisions.
